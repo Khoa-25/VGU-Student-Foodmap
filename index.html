@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bản Đồ Ẩm Thực Thời Sinh Viên</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { height: 100%; width: 100%; z-index: 1; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen flex flex-col overflow-hidden">
+
+  <!-- Header -->
+  <header class="bg-white border-b px-4 py-3 flex justify-between items-center shadow-sm z-10">
+    <div>
+      <h1 class="font-bold text-lg text-orange-600">🍜 FoodMap Kỷ Niệm Đại Học</h1>
+      <p class="text-xs text-gray-500">Chạm vào một điểm bất kỳ trên bản đồ để thêm quán mới</p>
+    </div>
+    <div class="flex gap-2 text-xs">
+      <span class="px-2 py-1 rounded bg-red-100 text-red-700 font-medium">● Tác giả đã ăn</span>
+      <span class="px-2 py-1 rounded bg-blue-100 text-blue-700 font-medium">● Cộng đồng thêm</span>
+    </div>
+  </header>
+
+  <!-- Cảnh báo nếu chưa bật Backend -->
+  <div id="apiErrorBanner" class="hidden bg-red-600 text-white text-xs text-center py-1.5 px-4">
+    Chưa kết nối được với Backend Python. Hãy kiểm tra lại terminal chạy <b>uvicorn</b>!
+  </div>
+
+  <!-- Main Layout -->
+  <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
+    <!-- Sidebar danh sách quán -->
+    <aside class="w-full md:w-96 bg-white border-r overflow-y-auto p-4 space-y-3 order-2 md:order-1 h-1/2 md:h-full">
+      <div class="flex justify-between items-center">
+        <h2 class="font-semibold text-sm uppercase tracking-wider text-gray-500">Danh sách quán (<span id="placeCount">0</span>)</h2>
+        <button onclick="loadPlacesFromAPI()" class="text-xs text-orange-600 hover:underline">Làm mới</button>
+      </div>
+      <div id="placeList" class="space-y-3"></div>
+    </aside>
+
+    <!-- Bản đồ -->
+    <main class="flex-1 relative order-1 md:order-2 h-1/2 md:h-full">
+      <div id="map"></div>
+    </main>
+  </div>
+
+  <!-- Modal thêm quán mới -->
+  <div id="addModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl max-w-md w-full p-5 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
+      <div class="flex justify-between items-center border-b pb-2">
+        <h3 class="font-bold text-base">Thêm địa điểm ẩm thực mới</h3>
+        <button onclick="closeModal()" class="text-gray-400 hover:text-gray-700 text-xl">&times;</button>
+      </div>
+
+      <form id="placeForm" class="space-y-3 text-sm">
+        <input type="hidden" id="latInput" />
+        <input type="hidden" id="lngInput" />
+
+        <div>
+          <label class="block font-medium mb-1">Tên quán *</label>
+          <input type="text" id="nameInput" required placeholder="VD: Bún đậu mắm tôm hẻm 45" class="w-full border rounded-lg px-3 py-2 focus:outline-orange-500" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block font-medium mb-1">Món nên thử *</label>
+            <input type="text" id="dishInput" required placeholder="VD: Bún đậu đặc biệt" class="w-full border rounded-lg px-3 py-2" />
+          </div>
+          <div>
+            <label class="block font-medium mb-1">Người thêm</label>
+            <select id="roleInput" class="w-full border rounded-lg px-3 py-2 bg-white">
+              <option value="community">Cộng đồng đóng góp</option>
+              <option value="author">Quán của Tác giả</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Chấm điểm 3 tiêu chí (1-5) -> Tự tính thang 10 -->
+        <div class="bg-orange-50 p-3 rounded-lg space-y-2">
+          <div class="flex justify-between items-center">
+            <span class="font-medium text-orange-800">Đánh giá nhanh (1 - 5)</span>
+            <span class="text-xs font-bold bg-orange-600 text-white px-2 py-0.5 rounded">Điểm quy đổi: <span id="previewScore">8.0</span>/10</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <label class="block text-gray-600">Hương vị</label>
+              <input type="number" id="tasteInput" min="1" max="5" step="0.5" value="4" oninput="updateScorePreview()" class="w-full border rounded px-2 py-1 mt-1 bg-white" />
+            </div>
+            <div>
+              <label class="block text-gray-600">Giá cả</label>
+              <input type="number" id="priceInput" min="1" max="5" step="0.5" value="4" oninput="updateScorePreview()" class="w-full border rounded px-2 py-1 mt-1 bg-white" />
+            </div>
+            <div>
+              <label class="block text-gray-600">Không gian</label>
+              <input type="number" id="spaceInput" min="1" max="5" step="0.5" value="4" oninput="updateScorePreview()" class="w-full border rounded px-2 py-1 mt-1 bg-white" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Tags -->
+        <div>
+          <label class="block font-medium mb-1">Chọn nhanh đặc điểm (Tags)</label>
+          <div id="tagContainer" class="flex flex-wrap gap-1.5"></div>
+        </div>
+
+        <!-- One-liner -->
+        <div>
+          <label class="block font-medium mb-1">Một câu chốt hạ (Tùy chọn, tối đa 140 ký tự)</label>
+          <input type="text" id="noteInput" maxlength="140" placeholder="VD: Quán ruột cứu đói cuối tháng, xin thêm tóp mỡ miễn phí." class="w-full border rounded-lg px-3 py-2" />
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button type="button" onclick="closeModal()" class="px-4 py-2 rounded-lg border hover:bg-gray-100">Hủy</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-orange-600 text-white font-medium hover:bg-orange-700">Lưu địa điểm</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = "http://127.0.0.1:8000/api/places";
+    const AVAILABLE_TAGS = ["#NgonBổRẻ", "#NoCăngBụng", "#MởKhuya", "#ĐiNhómĐông", "#NgồiLâuĐược", "#PhụcVụNhanh"];
+    let selectedTags = new Set();
+    let places = [];
+    let markers = [];
+
+    const map = L.map("map").setView([10.7780, 106.6995], 15);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    const createIcon = (role) => {
+      const color = role === "author" ? "#dc2626" : "#2563eb";
+      return L.divIcon({
+        className: "custom-pin",
+        html: `<div style="background:${color}; width:18px; height:18px; border-radius:50%; border:3px solid white; box-shadow:0 2px 5px rgba(0,0,0,0.4);"></div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+      });
+    };
+
+    map.on("click", (e) => {
+      const { lat, lng } = e.latlng;
+      document.getElementById("latInput").value = lat;
+      document.getElementById("lngInput").value = lng;
+      selectedTags.clear();
+      renderTagButtons();
+      updateScorePreview();
+      document.getElementById("addModal").classList.remove("hidden");
+    });
+
+    function closeModal() {
+      document.getElementById("addModal").classList.add("hidden");
+      document.getElementById("placeForm").reset();
+    }
+
+    function updateScorePreview() {
+      const t = parseFloat(document.getElementById("tasteInput").value) || 0;
+      const p = parseFloat(document.getElementById("priceInput").value) || 0;
+      const s = parseFloat(document.getElementById("spaceInput").value) || 0;
+      const avg10 = (((t + p + s) / 3) * 2).toFixed(1);
+      document.getElementById("previewScore").innerText = avg10;
+    }
+
+    function renderTagButtons() {
+      const container = document.getElementById("tagContainer");
+      container.innerHTML = AVAILABLE_TAGS.map((tag) => {
+        const active = selectedTags.has(tag);
+        return `<button type="button" onclick="toggleTag('${tag}')" class="px-2.5 py-1 rounded-full text-xs border transition ${
+          active ? "bg-orange-600 text-white border-orange-600" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+        }">${tag}</button>`;
+      }).join("");
+    }
+
+    function toggleTag(tag) {
+      if (selectedTags.has(tag)) selectedTags.delete(tag);
+      else selectedTags.add(tag);
+      renderTagButtons();
+    }
+
+    async function loadPlacesFromAPI() {
+      try {
+        const res = await fetch(API_URL);
+        if (!res.ok) throw new Error("Lỗi server");
+        places = await res.json();
+        document.getElementById("apiErrorBanner").classList.add("hidden");
+        renderApp();
+      } catch (err) {
+        document.getElementById("apiErrorBanner").classList.remove("hidden");
+        console.error(err);
+      }
+    }
+
+    document.getElementById("placeForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const payload = {
+        name: document.getElementById("nameInput").value,
+        dish: document.getElementById("dishInput").value,
+        role: document.getElementById("roleInput").value,
+        lat: parseFloat(document.getElementById("latInput").value),
+        lng: parseFloat(document.getElementById("lngInput").value),
+        taste: parseFloat(document.getElementById("tasteInput").value),
+        price: parseFloat(document.getElementById("priceInput").value),
+        space: parseFloat(document.getElementById("spaceInput").value),
+        tags: Array.from(selectedTags),
+        note: document.getElementById("noteInput").value
+      };
+
+      try {
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.status === 409) {
+          const errData = await res.json();
+          alert(errData.detail);
+          return;
+        }
+
+        if (res.ok) {
+          closeModal();
+          await loadPlacesFromAPI();
+        }
+      } catch (err) {
+        alert("Không thể gửi dữ liệu tới Backend. Hãy kiểm tra lại terminal!");
+      }
+    });
+
+    function renderApp() {
+      markers.forEach((m) => map.removeLayer(m));
+      markers = [];
+
+      const listEl = document.getElementById("placeList");
+      listEl.innerHTML = "";
+      document.getElementById("placeCount").innerText = places.length;
+
+      places.forEach((place) => {
+        const marker = L.marker([place.lat, place.lng], { icon: createIcon(place.role) })
+          .addTo(map)
+          .bindPopup(`<b>${place.name}</b><br/>Điểm: <b>${place.score}/10</b><br/>Món thử: ${place.dish}`);
+        markers.push(marker);
+
+        const badge =
+          place.role === "author"
+            ? `<span class="text-[10px] px-2 py-0.5 rounded bg-red-100 text-red-700 font-semibold">Tác giả</span>`
+            : `<span class="text-[10px] px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">Cộng đồng</span>`;
+
+        const tagsHtml = place.tags
+          .map((t) => `<span class="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">${t}</span>`)
+          .join("");
+
+        const card = document.createElement("div");
+        card.className = "border rounded-xl p-3 hover:border-orange-400 transition cursor-pointer bg-white shadow-sm";
+        card.innerHTML = `
+          <div class="flex justify-between items-start gap-2">
+            <div>
+              ${badge}
+              <h3 class="font-bold text-sm mt-1">${place.name}</h3>
+            </div>
+            <span class="bg-orange-100 text-orange-700 font-bold text-xs px-2 py-1 rounded-lg shrink-0">${place.score}/10</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1">🍽️ Nên thử: <b>${place.dish}</b></p>
+          ${place.note ? `<p class="text-xs text-gray-500 italic mt-1.5">"${place.note}"</p>` : ""}
+          <div class="flex flex-wrap gap-1 mt-2">${tagsHtml}</div>
+        `;
+
+        card.onclick = () => {
+          map.flyTo([place.lat, place.lng], 17);
+          marker.openPopup();
+        };
+
+        listEl.appendChild(card);
+      });
+    }
+
+    loadPlacesFromAPI();
+  </script>
+</body>
+</html>
